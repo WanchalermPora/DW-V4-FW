@@ -1,0 +1,167 @@
+# =============================================================================
+# Kconfig — DynaWatch V4 centralised configuration
+#
+# All tuneable parameters live here; per-component CMakeLists.txt files
+# consume them via the generated autoconf.h / sdkconfig.h.
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Application
+# ─────────────────────────────────────────────────────────────────────────────
+menu "Application"
+
+config APP_NOMINAL_FREQ_HZ
+    int "Nominal grid frequency (Hz)"
+    default 50
+    range 50 60
+    help
+      Nominal power system frequency.  Used as the initial LUT selection
+      for both P-class and M-class tasks (50 Hz or 60 Hz).
+
+config APP_PMU_SERVER_STACK_WORDS
+    int "PMU server task stack (words)"
+    default 1024
+    help
+      FreeRTOS stack size in 32-bit words for pmu_server_task
+      (C37.118.2 frame encoder + TLS 1.3 output).
+
+endmenu  # Application
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PoW Ring Buffer  (components/pow_buf)
+# ─────────────────────────────────────────────────────────────────────────────
+menu "PoW Ring Buffer"
+
+config POW_CHANNELS
+    int "Number of ADC channels in the PoW buffer"
+    default 7
+    range 1 8
+    help
+      Number of channels stored in the ring and double buffers.
+      Must match the ADS131M08-Q1 channel count (7: Va Vb Vc Ia Ib Ic In).
+
+config POW_RING_LEN
+    int "Ring buffer length per channel (samples)"
+    default 4000
+    help
+      Ring depth per channel at 8000 sps = 500 ms.
+      UTC-aligned: write pointer resets to 0 at each 500 ms UTC boundary.
+      Must be >= max TWLS window (961) + max FFT window (1553).
+
+config POW_DOUBLE_LEN
+    int "Double-buffer length per channel (samples)"
+    default 1888
+    help
+      Holds the tail of the previous 500 ms epoch for cross-boundary
+      window assembly.  Must be >= max window crossing (POW_RING_LEN - 1
+      in worst case, bounded in practice by the longest processing window).
+
+endmenu  # PoW Ring Buffer
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PMU — Phasor Measurement Unit  (components/pmu)
+# ─────────────────────────────────────────────────────────────────────────────
+menu "PMU — Phasor Measurement Unit"
+
+menu "P-class (IEEE C37.118.1 Performance Class P)"
+
+config PMU_P_ENABLED
+    bool "Enable P-class PMU task"
+    default y
+    help
+      Enables task_twls_pmu_p.  Requires the P-class LUT bank
+      (src/lut/twls_bank_p.c, ~462 KB in OTFAD Ctx 1 flash).
+
+config PMU_P_RATE_HZ
+    int "P-class output rate (fps)"
+    default 100
+    depends on PMU_P_ENABLED
+    help
+      Synchrophasor reporting rate in frames per second.
+      IEEE C37.118.1 allows 10, 25, 50, or 100 fps at 50 Hz nominal.
+
+config PMU_P_FREQ_DEV_THRESH_HZ
+    int "Frequency deviation threshold for PQ event (mHz)"
+    default 500
+    depends on PMU_P_ENABLED
+    help
+      Threshold in mHz (0.001 Hz steps) above which PQ_FREQ_DEV_BIT is set.
+      Default 500 mHz = 0.5 Hz (IEC 61000-4-30 Class A limit).
+
+endmenu  # P-class
+
+menu "M-class (IEEE C37.118.1 Performance Class M)"
+
+config PMU_M_ENABLED
+    bool "Enable M-class PMU task"
+    default y
+    help
+      Enables task_twls_pmu_m.  Requires the M-class LUT bank
+      (src/lut/twls_bank_m.c, ~2,274 KB in OTFAD Ctx 1 flash).
+
+config PMU_M_RATE_HZ
+    int "M-class output rate (fps)"
+    default 100
+    depends on PMU_M_ENABLED
+    help
+      Synchrophasor reporting rate in frames per second.
+
+config PMU_M_ROCOF_ALPHA_Q8
+    int "ROCOF IIR low-pass alpha (Q8 fixed-point, 0..255)"
+    default 64
+    range 0 255
+    depends on PMU_M_ENABLED
+    help
+      Alpha for the first-order IIR ROCOF smoother as a Q8 integer.
+      alpha_f = PMU_M_ROCOF_ALPHA_Q8 / 256.0
+        64  → α ≈ 0.25  (default; ~3 dB BW ≈ 8 Hz — recommended)
+       128  → α ≈ 0.50  (less smoothing)
+        32  → α ≈ 0.125 (more smoothing; increases latency)
+      IEEE C37.118.1 §5.6 allows finite-difference ROCOF estimation.
+
+endmenu  # M-class
+
+endmenu  # PMU
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security  (components/security)
+# ─────────────────────────────────────────────────────────────────────────────
+menu "Security"
+
+config SECURITY_DEBUG_UART
+    bool "Enable security phase PRINTF output over LPUART1"
+    default y
+    help
+      Prints each phase result (PASS / SKIP / FAIL) and timing over the
+      debug UART (LPUART1 → J-Link CDC → VS Code serial terminal).
+      Disable for production builds to eliminate timing side-channel.
+
+config SECURITY_LIFECYCLE_CHECK_ENABLE
+    bool "Enforce OEM_CLOSED lifecycle (fatal on OEM_OPEN)"
+    default n
+    help
+      When enabled, S2 treats OEM_OPEN lifecycle as a fatal error.
+      Leave disabled for development builds on FRDM-IMXRT1186.
+      Must be enabled for production / field firmware.
+
+config SECURITY_KEYSTORE_ID
+    hex "ELE keystore partition ID"
+    default 0x12345678
+    help
+      Keystore partition identifier written during production provisioning.
+      Must match the value used in the provisioning script.
+
+config SECURITY_KEYSTORE_NONCE
+    hex "ELE keystore anti-replay nonce"
+    default 0xABCD1234
+    help
+      Anti-replay nonce for the keystore session.  Must match provisioning.
+
+config SECURITY_CALIB_KEY_IDX
+    int "ELE keystore index for calibration AES-128 key"
+    default 0
+    help
+      Key index inside the ELE keystore holding the AES-128 key used to
+      decrypt the calibration blob (phase A3).
+
+endmenu  # Security
